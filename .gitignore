@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+
+# MLflow local files
+mlruns/
+
+# Outputs
+outputs/
+*.pkl
+*.joblib
+
+# Data cache / processed data
+data/processed/
+data/interim/
+
+# OS files
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
