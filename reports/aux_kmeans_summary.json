@@ -1,0 +1,19 @@
+{
+  "n_clusters": 4,
+  "silhouette": 0.35141606857128127,
+  "cluster_sizes": {
+    "0": 3653,
+    "1": 213,
+    "2": 1103,
+    "3": 31
+  },
+  "features_used": [
+    "Annual_Income",
+    "Monthly_Inhand_Salary",
+    "Total_EMI_per_month",
+    "Amount_invested_monthly",
+    "Monthly_Balance",
+    "Outstanding_Debt",
+    "Credit_Utilization_Ratio"
+  ]
+}
