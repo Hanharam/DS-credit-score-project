@@ -4,6 +4,18 @@ Data Science Term Project - team 6
 
 End-to-end pipeline that predicts a customer's credit score class (`Good` / `Standard` / `Poor`) from 28 personal and financial-behaviour features, with explicit ablations on **extreme outlier handling** and **class imbalance handling**.
 
+### Headline results (full 100k, Stratified 5-fold + GridSearchCV)
+
+| Metric | Proposal target | Achieved (RandomForest, tuned) |
+|---|---|---|
+| Macro-F1 (CV) | ≥ 0.75 | **0.7697 ± 0.0041** |
+| Macro-F1 (hold-out 20k) | — | **0.8114** |
+| Macro-Recall (hold-out) | — | **0.8122** |
+| Per-class Recall | ≥ 0.70 | Good 0.777 / Poor 0.837 / Standard 0.823 |
+| Accuracy (hold-out) | — | 0.8187 |
+
+Best params: `n_estimators=400, max_depth=None, min_samples_leaf=1`. Full result tables, ablation findings, and auxiliary-task scores are in [section 7](#7-results-full-run-100000-rows-stratified-5-fold-gridsearchcv).
+
 ---
 
 ## 1. Project Overview
@@ -232,7 +244,7 @@ Baseline → ensembles, all with `class_weight="balanced"` where supported:
 - `evaluate_cv`: Stratified k-fold returning mean ± std for accuracy / macro-F1 / macro-recall
 - `evaluate_holdout`: single 80/20 stratified split with `classification_report`
 - `tune_with_gridsearch`: `GridSearchCV` with `f1_macro` scoring
-- `plot_confusion_matrix`: saves PNG under `reports/`
+- Confusion matrix and per-class metric plots are saved under `reports/figures/` by `src/train.py`
 
 ### 5.7 Ablations
 
@@ -310,26 +322,121 @@ Modeling + ablation figures:
 
 ---
 
-## 7. Reproducing the Proposal's Target
+## 7. Results (full run, 100,000 rows, Stratified 5-fold, GridSearchCV)
 
-Proposal target: **Macro-F1 ≥ 0.75** and per-class **Recall ≥ 0.70** under Stratified 5-fold.
+Proposal targets:
+- **Macro-F1 ≥ 0.75** under Stratified 5-fold
+- per-class **Recall ≥ 0.70**
+
+To reproduce:
 
 ```bash
 python -m src.train --all
 ```
 
-Then inspect `reports/cv_baseline.csv` and `reports/final_summary.json`.
+### 7.1 Stratified 5-fold CV — baseline models
 
-A subsampled smoke-test (5,000 rows, k = 3, no GridSearch) already shows the expected ordering:
+From [`reports/cv_baseline.csv`](reports/cv_baseline.csv):
 
-```
-RandomForest       macro_f1 = 0.680
-GradientBoosting   macro_f1 = 0.670
-LogisticRegression macro_f1 = 0.652
-DecisionTree       macro_f1 = 0.610
-```
+| Model | Macro-F1 (mean ± std) | Macro-Recall | Accuracy |
+|---|---|---|---|
+| **RandomForest** | **0.7697 ± 0.0041** | 0.8001 | 0.7794 |
+| DecisionTree | 0.7179 ± 0.0025 | 0.7584 | 0.7239 |
+| GradientBoosting | 0.6948 ± 0.0031 | 0.7038 | 0.7142 |
+| LogisticRegression | 0.6567 ± 0.0034 | 0.7032 | 0.6647 |
 
-Final hold-out on that smoke-test: accuracy 0.705, macro-F1 0.683, macro-recall 0.688. Full-data + tuned grid is expected to clear the 0.75 macro-F1 bar.
+RandomForest clears the **0.75 Macro-F1** bar at the CV stage already.
+
+### 7.2 GridSearchCV-tuned best model — final hold-out
+
+From [`reports/final_summary.json`](reports/final_summary.json):
+
+- Best model: **RandomForest**
+- Best params: `n_estimators=400, max_depth=None, min_samples_leaf=1`
+- Hold-out (20,000 rows):
+
+| Metric | Value |
+|---|---|
+| Accuracy | **0.8187** |
+| Macro-F1 | **0.8114** |
+| Macro-Recall | **0.8122** |
+
+Per-class on the hold-out:
+
+| Class | Precision | Recall | F1 | Support |
+|---|---|---|---|---|
+| Good | 0.795 | **0.777** | 0.786 | 3,566 |
+| Poor | 0.801 | **0.837** | 0.818 | 5,799 |
+| Standard | 0.837 | **0.823** | 0.830 | 10,635 |
+
+All three per-class recalls clear the **0.70 target**. The minority class (Good, 17.8% of the data) is the hardest, as expected.
+
+### 7.3 Outlier handling ablation (RandomForest, 5-fold)
+
+From [`reports/ablation_outlier.csv`](reports/ablation_outlier.csv):
+
+| Outlier mode | Macro-F1 | Macro-Recall | Accuracy |
+|---|---|---|---|
+| `none` | 0.7626 | 0.7947 | 0.7726 |
+| `domain` | 0.7697 | 0.8001 | 0.7794 |
+| `domain_percentile` | **0.7718** | **0.8023** | **0.7815** |
+
+**Finding:** outlier cleaning is worth roughly +0.009 Macro-F1 over no handling, with `domain` + `percentile` slightly better than `domain` alone. The extreme garbage values (Age = 8,698; Interest_Rate = 5,797%; etc.) genuinely hurt downstream performance.
+
+### 7.4 Class imbalance handling ablation (RandomForest, 5-fold)
+
+From [`reports/ablation_imbalance.csv`](reports/ablation_imbalance.csv):
+
+| Strategy | Macro-F1 | Macro-Recall | Accuracy |
+|---|---|---|---|
+| `none` | **0.7920** | 0.7994 | **0.8017** |
+| `class_weight` | 0.7697 | **0.8001** | 0.7794 |
+| `smote` | 0.7417 | 0.7765 | 0.7522 |
+
+**Finding (counter-intuitive):** for RandomForest on this dataset, applying no special imbalance handling actually gives the highest Macro-F1 — the tree ensemble already handles the 53/29/18 split well, and `class_weight="balanced"` over-corrects, costing accuracy without proportional recall gains. SMOTE underperforms in every metric, likely because synthetic samples in this high-dimensional one-hot-encoded space introduce noise. Conclusion: **the class imbalance is real but does not require special handling for tree ensembles**, only for the linear baseline.
+
+### 7.5 Scaler × Encoder sweep (DecisionTree, 5-fold)
+
+From [`reports/ablation_preprocessing.csv`](reports/ablation_preprocessing.csv):
+
+| | OneHot | Ordinal | Target |
+|---|---|---|---|
+| Standard | 0.7180 | 0.7041 | 0.7106 |
+| MinMax | **0.7181** | 0.7045 | 0.7105 |
+| Robust | 0.7179 | 0.7040 | 0.7107 |
+
+**Finding:** scaler choice is essentially irrelevant for tree models (all three within 0.0001). Encoder choice matters more — `OneHot` beats `Ordinal` and `Target` by ~0.01 Macro-F1.
+
+### 7.6 Auxiliary tasks
+
+#### Regression on `Monthly_Balance` — [`reports/aux_regression.json`](reports/aux_regression.json)
+
+| Model | R² | MAE |
+|---|---|---|
+| Ridge | 0.702 | 83.18 |
+| GradientBoosting | **0.917** | **33.14** |
+
+#### KMeans clustering on payment behaviour (`k = 4`) — [`reports/aux_kmeans_summary.json`](reports/aux_kmeans_summary.json)
+
+- Silhouette: 0.348
+- Cluster sizes: {0: 22,241 / 1: 4,488 / 2: 72,579 / 3: 692}
+- Dominant cluster (2) holds ~73% of customers; outlier-like clusters (1, 3) are small and concentrated in extreme spending/saving behaviour. Centroids are in [`reports/aux_kmeans_centroids.csv`](reports/aux_kmeans_centroids.csv); elbow + silhouette over `k = 2..8` are in [`reports/aux_kmeans_elbow.csv`](reports/aux_kmeans_elbow.csv).
+
+### 7.7 Summary against the proposal
+
+| Goal | Target | Achieved | Status |
+|---|---|---|---|
+| Macro-F1 (CV) | ≥ 0.75 | 0.7697 (RF) | ✓ |
+| Macro-F1 (hold-out, tuned) | n/a | 0.8114 | ✓ |
+| Per-class Recall | ≥ 0.70 | 0.777 / 0.837 / 0.823 | ✓ |
+| Decision Tree → ensemble comparison | required | done across 4 models | ✓ |
+| 3 scaler × 3 encoder sweep | required | done | ✓ |
+| Stratified k-fold | required | k = 5 | ✓ |
+| Group-aware imputation | required | per-`Customer_ID` ffill / bfill | ✓ |
+| `Type_of_Loan` MultiLabel encoding | required | `MultiLabelBinarizer` | ✓ |
+| Outlier impact analysis | proposed | ablation table 7.3 | ✓ |
+| Class imbalance impact analysis | proposed | ablation table 7.4 | ✓ |
+| Auxiliary task | choose one | both regression and clustering done | ✓ |
 
 ---
 
@@ -354,3 +461,5 @@ New experiments should go through `python -m src.train` so that ablations, CV, t
 - Only `data/raw/train.csv` is kept. The Kaggle `test.csv` was removed because it ships **without** the `Credit_Score` label, so it cannot be used for local accuracy / F1 / recall scoring. See [data/README.md](data/README.md) for the full reasoning. All evaluation is done inside `train.csv` via Stratified k-fold + an 80 / 20 hold-out split.
 - `data/raw/train.csv` is ~30 MB. Consider keeping it out of git via `.gitignore` and re-downloading from Kaggle when needed.
 - GradientBoosting in scikit-learn does not accept `class_weight`; the imbalance ablation silently ignores that argument for it.
+- `final_pipeline.joblib` for the tuned RandomForest can be >1 GB. It is opt-in via `--save-pipeline` and ignored by git through the `*.joblib` rule in `.gitignore`.
+- A full `--all` run on the 100,000-row train set with `--cv-folds 5` and GridSearchCV takes roughly 30 – 120 minutes on a laptop, dominated by the RandomForest grid (24 combinations × 5 folds). Use `--sample-rows N --cv-folds 3 --skip-grid` for fast iteration; reach for `--all` only when you want the canonical numbers in section 7.
