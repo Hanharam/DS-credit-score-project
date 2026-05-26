@@ -1,0 +1,22 @@
+name: ds_credit
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pandas
+  - scikit-learn=1.5.*
+  - matplotlib
+  - seaborn
+  - jupyter
+  - ipykernel
+  - python-dotenv
+  - joblib
+  - tqdm
+  - llvm-openmp
+  - intel-openmp
+  - pip:
+      - imbalanced-learn
+      - mlflow
