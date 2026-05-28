@@ -18,6 +18,35 @@ Best params: `n_estimators=400, max_depth=None, min_samples_leaf=1`. Full result
 
 ---
 
+## Table of Contents
+
+- [1. Project Overview](#1-project-overview)
+- [2. Project Structure](#2-project-structure)
+- [3. Environment Setup](#3-environment-setup)
+- [4. Quickstart](#4-quickstart)
+- [5. What the Pipeline Does](#5-what-the-pipeline-does)
+  - [5.1 Cleaning](#51-cleaning-srcpreprocessingpy)
+  - [5.2 Imputation](#52-imputation)
+  - [5.3 Feature Engineering](#53-feature-engineering)
+  - [5.4 Preprocessing Matrix](#54-preprocessing-matrix-build_preprocessor)
+  - [5.5 Models](#55-models-srcmodelpy)
+  - [5.6 Evaluation](#56-evaluation-srcevaluatepy)
+  - [5.7 Ablations](#57-ablations)
+  - [5.8 Auxiliary Tasks](#58-auxiliary-tasks-srcauxiliarypy)
+- [6. Output Artifacts](#6-output-artifacts-reports)
+- [7. Results](#7-results-full-run-100000-rows-stratified-5-fold-gridsearchcv)
+  - [7.1 Baseline Model CV](#71-stratified-5-fold-cv--baseline-models)
+  - [7.2 Tuned Best Model](#72-gridsearchcv-tuned-best-model--final-hold-out)
+  - [7.3 Outlier Handling Ablation](#73-outlier-handling-ablation-randomforest-5-fold)
+  - [7.4 Class Imbalance Ablation](#74-class-imbalance-handling-ablation-randomforest-5-fold)
+  - [7.5 Scaler × Encoder Sweep](#75-scaler--encoder-sweep-decisiontree-5-fold)
+  - [7.6 Auxiliary Tasks](#76-auxiliary-tasks)
+  - [7.7 Summary Against Proposal](#77-summary-against-the-proposal)
+- [8. Notebooks vs `src/` Modules](#8-notebooks-vs-src-modules)
+- [9. Known Issues / Notes](#9-known-issues--notes)
+
+---
+
 ## 1. Project Overview
 
 - Dataset: [Credit Score Classification (Kaggle)](https://www.kaggle.com/datasets/parisrohan/credit-score-classification)
