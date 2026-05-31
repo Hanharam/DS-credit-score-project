@@ -32,3 +32,10 @@ data/interim/
 # IDE
 .vscode/
 .idea/
+
+# Claude Code
+.claude/
+
+# Sweep / training logs
+reports/sweep_run.log
+*.log

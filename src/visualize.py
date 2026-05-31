@@ -359,3 +359,33 @@ def plot_kmeans_elbow(
 
     ax1.set_title("KMeans elbow + silhouette over k")
     return _save(fig, save_path)
+
+
+def plot_full_sweep_top5(
+    top_k_df: pd.DataFrame,
+    save_path: str | None = None,
+) -> plt.Figure:
+    """Horizontal bar chart of the top-K leaderboard from run_full_sweep.
+
+    Expects columns: rank, scaler, encoder, model, params, macro_f1, macro_f1_std.
+    """
+    df = top_k_df.copy()
+    df["label"] = df.apply(
+        lambda r: f"#{int(r['rank'])} {r['model']} | "
+                  f"{r['scaler']}+{r['encoder']}\n{r['params']}",
+        axis=1,
+    )
+    fig, ax = plt.subplots(figsize=(9, max(3.5, 0.9 * len(df))))
+    bars = ax.barh(
+        df["label"][::-1],
+        df["macro_f1"][::-1],
+        xerr=df["macro_f1_std"][::-1],
+        color=sns.color_palette("crest", n_colors=len(df))[::-1],
+    )
+    ax.set_xlabel("Macro-F1 (CV mean)")
+    ax.set_title("Top 5 sweep configurations (scaler × encoder × model × params)")
+    ax.set_xlim(min(df["macro_f1"].min() - 0.02, 0.6), 1.0)
+    for bar, value in zip(bars, df["macro_f1"][::-1]):
+        ax.text(value + 0.003, bar.get_y() + bar.get_height() / 2,
+                f"{value:.4f}", va="center")
+    return _save(fig, save_path)

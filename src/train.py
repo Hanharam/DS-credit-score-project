@@ -51,6 +51,7 @@ from src.preprocessing import (
     group_impute,
     split_features,
 )
+from src.sweep import run_full_sweep, save_sweep_artifacts
 from src.visualize import (
     plot_ablation_imbalance,
     plot_ablation_outlier,
@@ -61,6 +62,7 @@ from src.visualize import (
     plot_confusion_matrix,
     plot_correlation_matrix,
     plot_cv_baseline,
+    plot_full_sweep_top5,
     plot_kmeans_elbow,
     plot_numeric_histograms,
     plot_per_class_metrics,
@@ -153,6 +155,27 @@ def main(args: argparse.Namespace) -> None:
         imb_df.to_csv(out_dir / "ablation_imbalance.csv", index=False)
         _log("\n" + imb_df.to_string(index=False))
         plot_ablation_imbalance(imb_df, save_path=fig_dir / "ablation_imbalance.png")
+
+    # 3b. Open-source SW contribution: single top-level full sweep
+    #     (scaler × encoder × model × hyperparameter) ranked top-5 + best.
+    if args.run_sweep:
+        _log("full sweep: scaler x encoder x model x params")
+        board, top5, best = run_full_sweep(
+            df,
+            cv=args.sweep_cv,
+            sample_size=args.sweep_sample,
+            top_k=5,
+            verbose=True,
+        )
+        paths = save_sweep_artifacts(board, top5, best, out_dir)
+        for name, p in paths.items():
+            _log(f"  wrote {p.name}")
+        _log("\nTop 5 configurations:\n" + top5.to_string(index=False))
+        _log(
+            f"BEST: {best.get('model')} | {best.get('scaler')}+{best.get('encoder')} "
+            f"| {best.get('params')} | macro_f1={best.get('macro_f1'):.4f}"
+        )
+        plot_full_sweep_top5(top5, save_path=fig_dir / "full_sweep_top5.png")
 
     # 4. ablation - scaler x encoder
     if args.run_preproc_ablation:
@@ -315,6 +338,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--run-preproc-ablation", action="store_true")
     p.add_argument("--run-auxiliary", action="store_true")
     p.add_argument(
+        "--run-sweep",
+        action="store_true",
+        help="run the single-top-level full sweep (scaler x encoder x model x params)",
+    )
+    p.add_argument(
+        "--sweep-cv",
+        type=int,
+        default=3,
+        help="cv folds for the full sweep (default 3 for tractability)",
+    )
+    p.add_argument(
+        "--sweep-sample",
+        type=int,
+        default=20000,
+        help="subsample rows for the full sweep; 0 = full dataset",
+    )
+    p.add_argument(
         "--save-pipeline",
         action="store_true",
         help="persist the fitted final pipeline (large file; opt-in)",
@@ -343,6 +383,10 @@ def parse_args() -> argparse.Namespace:
         args.run_imbalance_ablation = True
         args.run_preproc_ablation = True
         args.run_auxiliary = True
+        args.run_sweep = True
+    # convert 0 → None for sweep_sample (means full dataset)
+    if args.sweep_sample == 0:
+        args.sweep_sample = None
     return args
 
 
