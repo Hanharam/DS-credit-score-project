@@ -1,15 +1,39 @@
-"""End-to-end training script.
+"""End-to-end training driver.
 
-Stages (each is independently togglable):
-1. Load raw train.csv
-2. EDA tables + figures (--run-eda)
-3. Clean + group-aware imputation + Type_of_Loan MLB + feature engineering
-4. Ablations: outlier handling, class imbalance, scaler x encoder
-5. Stratified k-fold evaluation across all base models
-6. GridSearchCV tuning on the best base model
-7. Final hold-out evaluation + confusion matrix + per-class metrics
-8. Auxiliary tasks: regression on Monthly_Balance + KMeans on payment behaviour
-9. Save artifacts (CSV reports, PNG figures, optionally fitted model)
+This module is the project's single CLI entry point. Running
+
+    python -m src.train --all
+
+reproduces every table, figure, and metric quoted in the report from
+``data/raw/train.csv``.
+
+Stages (each is independently togglable via a flag):
+
+    1. Load raw train.csv.
+    2. EDA tables + figures (``--run-eda``).
+    3. Clean + group-aware imputation + ``Type_of_Loan`` MLB +
+       feature engineering. Always runs because the downstream stages
+       need the cleaned dataframe.
+    4. Ablations (each gated by its own flag):
+         * outlier handling          (``--run-outlier-ablation``)
+         * class imbalance handling  (``--run-imbalance-ablation``)
+         * scaler x encoder sweep    (``--run-preproc-ablation``)
+       And the Open Source SW Contribution full sweep
+       (``--run-sweep``) - the single top-level function
+       ``run_full_sweep()`` defined in :mod:`src.sweep`.
+    5. Stratified k-fold evaluation across all base models.
+    6. GridSearchCV tuning on the best base model
+       (skipped with ``--skip-grid`` for fast smoke tests).
+    7. Final hold-out evaluation + confusion matrix + per-class metrics.
+    8. Auxiliary tasks: regression on ``Monthly_Balance`` and KMeans on
+       payment behaviour (``--run-auxiliary``).
+    9. Persist every artifact under ``reports/`` and ``reports/figures/``
+       (optionally including the fitted pipeline via ``--save-pipeline``).
+
+CLI flags
+---------
+The ``--all`` super-flag turns on every stage. See
+``parse_args()`` for the full list of switches.
 """
 
 from __future__ import annotations
@@ -74,24 +98,55 @@ DEFAULT_OUT = ROOT / "reports"
 
 
 def _log(msg: str) -> None:
+    """Timestamped print used everywhere in this module.
+
+    ``flush=True`` keeps the output live even when stdout is being
+    piped to a file (``tee``) or captured by a CI runner.
+    """
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 def prepare_dataset(raw_csv: Path, outlier_mode: str = "domain") -> pd.DataFrame:
+    """Run the full preprocessing chain and return the model-ready frame.
+
+    Sequence:
+        ``clean_data`` (keeping Customer_ID)
+        -> ``group_impute`` (per-Customer_ID ffill/bfill)
+        -> drop Customer_ID
+        -> ``encode_type_of_loan`` (MultiLabelBinarizer)
+        -> ``add_engineered_features`` (4 ratio features).
+
+    Parameters
+    ----------
+    raw_csv : pathlib.Path
+        Path to ``data/raw/train.csv``.
+    outlier_mode : {'none', 'domain', 'domain_percentile'}
+        Forwarded to :func:`src.preprocessing.clean_data`.
+    """
     _log(f"loading {raw_csv}")
     raw = pd.read_csv(raw_csv, low_memory=False)
     _log(f"raw shape: {raw.shape}")
 
+    # 1) Cleaning + outlier handling. We keep Customer_ID for the next step.
     df = clean_data(raw, outlier_mode=outlier_mode, keep_customer_id=True)
+    # 2) Per-customer forward/backward fill (panel-structure aware).
     df = group_impute(df, group_col="Customer_ID")
     df = df.drop(columns=["Customer_ID"])
+    # 3) Multi-label binarize the Type_of_Loan column.
     df, _ = encode_type_of_loan(df, col="Type_of_Loan")
+    # 4) Append the four engineered ratio features.
     df = add_engineered_features(df)
     _log(f"prepared shape: {df.shape}")
     return df
 
 
 def _run_eda(raw_df: pd.DataFrame, out_dir: Path, fig_dir: Path) -> None:
+    """Generate Section 2 of the report: 8 EDA tables + 6 figures.
+
+    Tables are written to ``out_dir/eda/`` and figures to
+    ``fig_dir/eda/``. Cleaning is applied inside the plotting functions
+    where appropriate so that figures show realistic ranges.
+    """
     _log("EDA: writing tables")
     eda_dir = out_dir / "eda"
     written = write_eda_reports(raw_df, eda_dir)
@@ -100,6 +155,8 @@ def _run_eda(raw_df: pd.DataFrame, out_dir: Path, fig_dir: Path) -> None:
 
     _log("EDA: writing figures")
     eda_fig_dir = fig_dir / "eda"
+    # Figure 1..6 of the report. Naming matches the citations in the
+    # docx so the reviewer can map images to text trivially.
     plot_target_distribution(raw_df, save_path=eda_fig_dir / "fig01_target_distribution.png")
     plot_numeric_histograms(raw_df, save_path=eda_fig_dir / "fig02_numeric_histograms.png")
     plot_boxplots_before_after(raw_df, save_path=eda_fig_dir / "fig03_boxplot_before_after.png")
@@ -110,25 +167,33 @@ def _run_eda(raw_df: pd.DataFrame, out_dir: Path, fig_dir: Path) -> None:
 
 
 def main(args: argparse.Namespace) -> None:
+    """Run all enabled stages in order. Called from ``__main__``."""
     raw_csv = Path(args.train_csv)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Figures live in a separate subdir to keep the table CSVs uncluttered.
     fig_dir = out_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
 
+    # --sample-rows 0 means "use the full dataset"; anything positive
+    # is treated as a row count to subsample for fast iteration.
     sample_n = args.sample_rows if args.sample_rows > 0 else None
     if sample_n:
         _log(f"sampling {sample_n} rows for fast mode")
 
+    # Load raw CSV once; downstream stages reuse this frame.
     raw_df = pd.read_csv(raw_csv, low_memory=False)
     if sample_n:
+        # ``random_state=42`` pinned so the subsample is reproducible.
         raw_df = raw_df.sample(n=sample_n, random_state=42).reset_index(drop=True)
 
-    # 1. EDA
+    # ---- Stage 1: EDA tables + figures ------------------------------
     if args.run_eda:
         _run_eda(raw_df, out_dir, fig_dir)
 
-    # 2. ablation - outlier handling (operates on raw)
+    # ---- Stage 2: outlier-handling ablation -------------------------
+    # Note: this ablation needs the raw frame (each mode triggers a
+    # fresh cleaning chain inside :func:`ablation_outlier`).
     if args.run_outlier_ablation:
         _log("ablation: outlier handling")
         outlier_df = ablation_outlier(
@@ -177,7 +242,7 @@ def main(args: argparse.Namespace) -> None:
         )
         plot_full_sweep_top5(top5, save_path=fig_dir / "full_sweep_top5.png")
 
-    # 4. ablation - scaler x encoder
+    # ---- Stage 4: scaler x encoder ablation -------------------------
     if args.run_preproc_ablation:
         _log("ablation: scaler x encoder")
         prep_df = ablation_preprocessing(
@@ -187,10 +252,13 @@ def main(args: argparse.Namespace) -> None:
         _log("\n" + prep_df.to_string(index=False))
         plot_ablation_preprocessing(prep_df, save_path=fig_dir / "ablation_preprocessing.png")
 
-    # 5. Stratified k-fold baseline comparison
+    # ---- Stage 5: Stratified k-fold baseline comparison --------------
+    # Section 5.1 of the report. Same RobustScaler + OneHotEncoder
+    # preprocessor as the ablations so the table is directly comparable.
     _log("stratified k-fold across base models")
     X, y, num_feat, cat_feat = split_features(df)
     preprocessor = build_preprocessor(num_feat, cat_feat, scaler="robust", encoder="onehot")
+    # class_weight='balanced' matches the ablation 2 'class_weight' cell.
     base_models = get_models(class_weight="balanced")
 
     cv_rows = []
@@ -215,7 +283,8 @@ def main(args: argparse.Namespace) -> None:
     _log("\n" + cv_df.to_string(index=False))
     plot_cv_baseline(cv_df, save_path=fig_dir / "cv_baseline.png")
 
-    # 6. tune best model with GridSearchCV
+    # ---- Stage 6: GridSearchCV on the CV winner ---------------------
+    # Best model from Stage 5 is the row 0 of the sorted CV table.
     best_name = cv_df.iloc[0]["model"]
     _log(f"GridSearchCV on best model: {best_name}")
     best_model = base_models[best_name]
@@ -223,6 +292,7 @@ def main(args: argparse.Namespace) -> None:
     grid = get_param_grids()[best_name]
 
     if args.skip_grid:
+        # Smoke-test mode: skip the expensive grid search.
         _log("--skip-grid: using untuned pipeline")
         tuned_pipeline = best_pipeline
         best_params = None
@@ -230,12 +300,16 @@ def main(args: argparse.Namespace) -> None:
         grid_obj = tune_with_gridsearch(
             best_pipeline, grid, X, y, cv=args.cv_folds, scoring="f1_macro"
         )
+        # refit=True inside tune_with_gridsearch ensures the best
+        # estimator is already refitted on the full ``(X, y)`` here.
         tuned_pipeline = grid_obj.best_estimator_
         best_params = grid_obj.best_params_
         _log(f"best params: {best_params}")
         _log(f"best CV macro_f1: {grid_obj.best_score_:.4f}")
 
-    # 7. Final hold-out evaluation
+    # ---- Stage 7: Final 80/20 hold-out evaluation -------------------
+    # ``stratify=y`` preserves the 53/29/18 class ratio in both splits;
+    # ``random_state=42`` makes the split reproducible.
     X_train, X_valid, y_train, y_valid = train_test_split(
         X, y, test_size=0.2, stratify=y, random_state=42
     )
@@ -271,7 +345,9 @@ def main(args: argparse.Namespace) -> None:
     with open(out_dir / "final_summary.json", "w", encoding="utf-8") as f:
         json.dump(final_summary, f, indent=2, ensure_ascii=False)
 
-    # 8. auxiliary tasks
+    # ---- Stage 8: auxiliary tasks (Section 6 of the report) --------
+    # Both are wrapped in try/except so a failure here does not undo the
+    # successful classification artifacts already on disk.
     if args.run_auxiliary:
         _log("auxiliary: regression on Monthly_Balance")
         try:
@@ -310,7 +386,9 @@ def main(args: argparse.Namespace) -> None:
         except Exception as exc:
             _log(f"clustering failed: {exc}")
 
-    # 9. persist final pipeline (opt-in; the artifact can be >1 GB for RF)
+    # ---- Stage 9: optionally persist the fitted final pipeline -----
+    # joblib dump of a tuned 400-tree RandomForest can exceed 1 GB,
+    # so it is opt-in to keep the repo light by default.
     if args.save_pipeline:
         joblib.dump(tuned_pipeline, out_dir / "final_pipeline.joblib")
         _log(f"saved final_pipeline.joblib (size may be large)")
@@ -320,6 +398,14 @@ def main(args: argparse.Namespace) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Define and parse the command-line interface.
+
+    Returns
+    -------
+    argparse.Namespace
+        ``args`` object consumed by :func:`main`. The ``--all`` flag
+        flips every stage switch on at once.
+    """
     p = argparse.ArgumentParser()
     p.add_argument("--train-csv", default=str(ROOT / "data" / "raw" / "train.csv"))
     p.add_argument("--out-dir", default=str(DEFAULT_OUT))

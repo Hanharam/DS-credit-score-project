@@ -1,5 +1,38 @@
-"""All plot generation. Functions accept a save_path; if given, the figure is
-written to disk and closed. Used by src/train.py via --save-plots."""
+"""Central plot-generation module for the term project.
+
+Every public function in this module returns a :class:`matplotlib.figure.Figure`
+and accepts an optional ``save_path``. When ``save_path`` is given the figure
+is written to disk (PNG, dpi=120, tight bounding box) and closed; otherwise
+the figure is returned for inline display in notebooks.
+
+Conventions
+-----------
+* Matplotlib backend is forced to 'Agg' so the module is safe to import
+  in headless environments (no display required).
+* Seaborn ``whitegrid`` theme for consistency.
+* Cleaning is applied (via :func:`src.preprocessing.clean_data`) before EDA
+  plots so impossible outliers do not crush the axis ranges - except for
+  :func:`plot_boxplots_before_after`, which deliberately shows the contrast.
+
+Figure naming convention
+------------------------
+EDA plots correspond one-to-one with the report figures:
+
+    plot_target_distribution        -> Figure 1
+    plot_numeric_histograms         -> Figure 2
+    plot_boxplots_before_after      -> Figures 3 & 4 (single combined PNG)
+    plot_correlation_matrix         -> Figure 5 (report Figure 4)
+    plot_categorical_distributions  -> Figure 5
+    plot_boxplot_by_target          -> Figure 6
+    plot_cv_baseline                -> Section 5.1 bar chart
+    plot_ablation_outlier           -> Section 5.4 bar chart
+    plot_ablation_imbalance         -> Section 5.5 bar chart
+    plot_ablation_preprocessing     -> Section 5.6 heatmap
+    plot_confusion_matrix           -> Section 5.3 confusion matrix
+    plot_per_class_metrics          -> Section 5.3 per-class P/R/F1 chart
+    plot_kmeans_elbow               -> Section 6.2 elbow + silhouette
+    plot_full_sweep_top5            -> Section 5.7 sweep leaderboard
+"""
 
 from __future__ import annotations
 
@@ -31,8 +64,27 @@ sns.set_theme(style="whitegrid")
 
 
 def _save(fig: plt.Figure, save_path: str | Path | None) -> plt.Figure:
+    """Persist ``fig`` to ``save_path`` (if given) and close it.
+
+    Used as the last step of every public plot function so callers can
+    simply return ``_save(fig, save_path)``.
+
+    Parameters
+    ----------
+    fig : matplotlib.figure.Figure
+    save_path : str, pathlib.Path or None
+        If None, the figure is returned without writing to disk so it
+        stays interactive in notebooks.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The same figure for chaining.
+    """
     if save_path:
         save_path = Path(save_path)
+        # Create any missing parent directories so the caller does not
+        # have to worry about the output tree existing.
         save_path.parent.mkdir(parents=True, exist_ok=True)
         fig.tight_layout()
         fig.savefig(save_path, dpi=120, bbox_inches="tight")
@@ -197,6 +249,11 @@ def plot_ablation_outlier(
     ablation_df: pd.DataFrame,
     save_path: str | None = None,
 ) -> plt.Figure:
+    """Section 5.4 - Macro-F1 bar chart per outlier mode and model.
+
+    Expects the columns ``outlier_mode``, ``model``, ``macro_f1`` from
+    :func:`src.evaluate.ablation_outlier`.
+    """
     fig, ax = plt.subplots(figsize=(8, 5))
     sns.barplot(
         data=ablation_df,
@@ -218,6 +275,11 @@ def plot_ablation_imbalance(
     ablation_df: pd.DataFrame,
     save_path: str | None = None,
 ) -> plt.Figure:
+    """Section 5.5 - side-by-side Macro-F1 and Macro-Recall bar charts.
+
+    Two subplots (one per metric) so the report can show that even when
+    Macro-F1 drops with SMOTE, Macro-Recall does not necessarily improve.
+    """
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     for ax, metric, title in zip(
         axes,
@@ -289,6 +351,20 @@ def plot_confusion_matrix(
     title: str = "Confusion Matrix",
     save_path: str | None = None,
 ) -> plt.Figure:
+    """Annotated confusion-matrix heatmap.
+
+    Parameters
+    ----------
+    y_true, y_pred : array-like
+        True and predicted class labels (strings work fine).
+    labels : iterable, optional
+        Class order for both axes; pass the sorted unique labels so
+        rows/columns align nicely (e.g. ``['Good', 'Poor', 'Standard']``).
+    title : str, default='Confusion Matrix'
+    save_path : str or None
+    """
+    # Local import: scikit-learn is already a hard dependency so this is
+    # purely for keeping the top-level import block visually compact.
     from sklearn.metrics import confusion_matrix
 
     cm = confusion_matrix(y_true, y_pred, labels=labels)
@@ -346,6 +422,14 @@ def plot_kmeans_elbow(
     elbow_df: pd.DataFrame,
     save_path: str | None = None,
 ) -> plt.Figure:
+    """Twin-y elbow + silhouette curve for KMeans (Section 6.2).
+
+    Inertia on the left axis (decreasing curve), silhouette on the
+    right axis (peaking curve). The two together motivate the k = 4
+    choice in the report.
+
+    ``elbow_df`` is produced by :func:`src.auxiliary.kmeans_elbow`.
+    """
     fig, ax1 = plt.subplots(figsize=(7, 4.5))
     ax1.plot(elbow_df["k"], elbow_df["inertia"], "o-", color="tab:blue", label="inertia")
     ax1.set_xlabel("k")
